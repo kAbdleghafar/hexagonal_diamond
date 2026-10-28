@@ -1,0 +1,91 @@
+# =====================================================================
+#  STEP 2b : Shock compression with MSST (Multi-Scale Shock Technique)
+#
+#  MSST evolves the periodic cell so it stays on the Rayleigh line and
+#  the Hugoniot of a steady planar shock of speed Us. The final state is
+#  the one behind a real shock, without a ~100-nm-long NEMD sample.
+#
+#  in : graphite_eq.data (from STEP 1)
+#  run: mpirun -np N lmp -in in.02b_msst.lammps -var Us 8.0
+# =====================================================================
+
+# ---------------- user parameters (override with -var name value) ----
+variable  datafile index graphite_eq.data
+variable  dir      index z            # shock direction: z = c-axis, x = zigzag, y = armchair
+variable  Us       index 8.0          # shock velocity (km/s)
+variable  q        index 100.0        # MSST cell "mass" (mass^2/length^4), larger = slower compression
+variable  mu       index 400.0        # MSST artificial viscosity (mass/length/time); ~critical damping for q = 100
+variable  tscale   index 0.01         # fraction of initial KE converted to compression at start
+variable  trun     index 30.0         # ps
+variable  dt       index 0.0005       # ps (use 0.00025 for Us > ~10 km/s)
+variable  nout     index 100
+variable  ndump    index 2000
+variable  rcn      index 1.9          # A, bond cutoff for coordination (sp2 = 3, sp3 = 4)
+
+# ---------------- system -------------------------------------------
+units          metal
+dimension      3
+boundary       p p p
+atom_style     charge
+atom_modify    map array
+
+read_data      ${datafile}
+
+pair_style     lcbop                      # cheap stand-in for ACE+D2
+pair_coeff     * * C.lcbop C
+
+neighbor       2.0 bin
+neigh_modify   delay 0 every 1 check yes
+
+timestep       ${dt}
+
+# ---------------- analysis -----------------------------------------
+compute        cn all coord/atom cutoff ${rcn}
+compute        peatom all pe/atom
+variable       is_sp3 atom "c_cn == 4"
+variable       is_sp2 atom "c_cn == 3"
+compute        nsp3 all reduce sum v_is_sp3
+compute        nsp2 all reduce sum v_is_sp2
+variable       fsp3 equal c_nsp3/atoms
+variable       fsp2 equal c_nsp2/atoms
+
+variable       Pl   equal p${dir}${dir}
+
+thermo_style   custom step temp pe etotal press pxx pyy pzz vol density
+run            0
+variable       V0   equal $(vol)
+variable       rho0 equal $(density)
+
+# ---------------- MSST ---------------------------------------------
+variable       UsA equal ${Us}*10.0                 # km/s -> A/ps (metal velocity unit)
+variable       nrun equal round(${trun}/${dt})
+
+reset_timestep 0
+fix            shock all msst ${dir} ${UsA} q ${q} mu ${mu} tscale ${tscale}
+variable       econs   equal etotal+f_shock         # eV, MSST conserved quantity (should stay ~constant)
+
+variable       dhug    equal f_shock[1]             # K, departure from Hugoniot (-> 0)
+variable       dray    equal f_shock[2]/1.0e4       # GPa, departure from Rayleigh line (-> 0)
+variable       VV0     equal vol/v_V0
+variable       up      equal ${Us}*(1.0-vol/v_V0)   # km/s, particle velocity
+variable       P_RH    equal ${rho0}*${Us}*v_up     # GPa, rho0*Us*up (Rankine-Hugoniot)
+variable       Pl_GPa  equal v_Pl/1.0e4
+variable       Pt_GPa  equal (pxx+pyy+pzz-v_Pl)/2.0e4
+variable       tau_GPa equal (v_Pl_GPa-v_Pt_GPa)/2.0
+
+thermo_style   custom step time v_VV0 density temp pe etotal press &
+               v_Pl_GPa v_Pt_GPa v_tau_GPa v_P_RH v_up v_dhug v_dray v_econs v_fsp3 v_fsp2
+thermo_modify  flush yes
+thermo         ${nout}
+
+fix            prof all print ${nout} "$(step) $(time:%.4f) $(v_VV0:%.5f) $(density:%.4f) $(temp:%.2f) $(v_Pl_GPa:%.4f) $(v_Pt_GPa:%.4f) $(v_tau_GPa:%.4f) $(v_P_RH:%.4f) $(v_up:%.4f) $(v_dhug:%.2f) $(v_dray:%.4f) $(v_fsp3:%.5f) $(v_fsp2:%.5f)" &
+               file msst_Us${Us}_profile.txt screen no &
+               title "# step time(ps) V/V0 rho(g/cc) T(K) P_long(GPa) P_lat(GPa) tau(GPa) P_RH(GPa) up(km/s) dHug(K) dRay(GPa) f_sp3 f_sp2"
+
+dump           d1 all custom ${ndump} dump.msst_Us${Us}.lammpstrj id type x y z vx vy vz c_cn c_peatom
+dump_modify    d1 sort id
+
+restart        20000 msst.restart.1 msst.restart.2
+
+run            ${nrun}
+write_data     msst_Us${Us}_final.data nocoeff

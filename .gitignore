@@ -1,0 +1,10 @@
+# large simulation outputs (kept out of git)
+*.lammpstrj
+*.restart
+*.restart.*
+graphite_eq.data
+ramp_*.data
+msst_*_final.data
+out.*
+run_all.out
+__pycache__/

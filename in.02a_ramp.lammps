@@ -1,0 +1,114 @@
+# =====================================================================
+#  STEP 2a : Uniaxial high-strain-rate compression ("shock-like" ramp)
+#
+#  - uniaxial STRAIN (as behind a planar shock): only the loading axis
+#    shrinks, the two lateral box lengths stay fixed
+#  - NVE, no thermostat: adiabatic, all mechanical work stays as heat
+#  - constant engineering strain rate, then hold at the final strain
+#
+#  in : graphite_eq.data (from STEP 1)
+#  run: mpirun -np N lmp -in in.02a_ramp.lammps -var srate 1e10 -var emax 0.40
+# =====================================================================
+
+# ---------------- user parameters (override with -var name value) ----
+variable  datafile index graphite_eq.data
+variable  dir      index z            # loading axis: z = c-axis, x = zigzag, y = armchair
+variable  srate    index 1.0e10       # engineering strain rate (1/s)
+variable  emax     index 0.40         # final compressive engineering strain (0.40 -> L = 0.60 L0)
+variable  thold    index 10.0         # ps, hold at emax (fixed volume, NVE)
+variable  dt       index 0.0005       # ps
+variable  nout     index 200          # steps between thermo / profile lines
+variable  ndump    index 2000         # steps between dump frames
+variable  rcn      index 1.9          # A, bond cutoff for coordination (sp2 = 3, sp3 = 4)
+
+# ---------------- system -------------------------------------------
+units          metal
+dimension      3
+boundary       p p p
+atom_style     charge
+atom_modify    map array
+
+read_data      ${datafile}
+
+pair_style     hybrid/overlay pace table linear 10000
+pair_coeff     * * pace c_ace.yace C
+pair_coeff     * * table d2.table D2 9.0
+
+neighbor       2.0 bin
+neigh_modify   delay 0 every 1 check yes
+
+timestep       ${dt}
+
+# ---------------- analysis -----------------------------------------
+compute        cn all coord/atom cutoff ${rcn}
+compute        peatom all pe/atom
+variable       is_sp3 atom "c_cn == 4"
+variable       is_sp2 atom "c_cn == 3"
+compute        nsp3 all reduce sum v_is_sp3
+compute        nsp2 all reduce sum v_is_sp2
+variable       fsp3 equal c_nsp3/atoms
+variable       fsp2 equal c_nsp2/atoms
+
+variable       Ll   equal l${dir}                  # box length along loading axis (A)
+variable       Pl   equal p${dir}${dir}            # longitudinal stress (bar, + = compressive)
+
+# ---------------- reference (unshocked) state ----------------------
+thermo_style   custom step temp pe etotal press pxx pyy pzz vol density
+run            0
+
+variable       L0   equal ${Ll}
+variable       V0   equal $(vol)
+variable       E0   equal $(etotal)
+variable       P0   equal ${Pl}
+variable       rho0 equal $(density)               # g/cc
+variable       kB     equal 8.617333262e-5         # eV/K
+variable       nktv2p equal 1.6021765e6            # bar*A^3 per eV
+
+variable       strain  equal (v_L0-v_Ll)/v_L0
+variable       VV0     equal vol/v_V0
+variable       eta     equal 1.0-vol/v_V0
+variable       Pl_GPa  equal v_Pl/1.0e4
+variable       Pt_GPa  equal (pxx+pyy+pzz-v_Pl)/2.0e4   # mean lateral stress
+variable       tau_GPa equal (v_Pl_GPa-v_Pt_GPa)/2.0     # max shear stress
+# departure from the Rankine-Hugoniot energy, in K (same definition as MSST's dhugoniot):
+#   (E_H - E)/(3 N kB),  E_H = E0 + 0.5*(P+P0)*(V0-V)
+#   = 0 on the Hugoniot, > 0 colder than the shock state at this V (quasi-isentropic ramp)
+variable       dhug equal (0.5*(v_Pl+v_P0)*(v_V0-vol)/v_nktv2p-(etotal-v_E0))/(3.0*atoms*v_kB)
+# shock that would reach the same (P, V) state along a Rayleigh line
+variable       Us_eq equal sqrt(abs(v_Pl-v_P0)*1.0e5/(v_rho0*1.0e3*(v_eta+1.0e-12)))/1.0e3   # km/s
+variable       up_eq equal v_Us_eq*v_eta                                                     # km/s
+
+print          "Reference: L0 = ${L0} A, V0 = ${V0} A^3, rho0 = ${rho0} g/cc, P0 = $(v_P0/1e4) GPa, E0 = ${E0} eV"
+
+# ---------------- loading parameters ------------------------------
+variable       erate equal -${srate}*1.0e-12        # 1/ps (metal time unit)
+variable       nramp equal round(${emax}/(${srate}*1.0e-12)/${dt})
+variable       nhold equal round(${thold}/${dt})
+print          "Ramp: strain rate ${srate} 1/s -> erate ${erate} 1/ps, ${nramp} steps to strain ${emax}; hold ${nhold} steps"
+
+# ---------------- output -------------------------------------------
+reset_timestep 0
+thermo_style   custom step time v_strain v_VV0 density temp pe etotal press &
+               v_Pl_GPa v_Pt_GPa v_tau_GPa v_dhug v_fsp3 v_fsp2 v_Us_eq v_up_eq
+thermo_modify  flush yes
+thermo         ${nout}
+
+fix            prof all print ${nout} "$(step) $(time:%.4f) $(v_strain:%.5f) $(v_VV0:%.5f) $(density:%.4f) $(temp:%.2f) $(v_Pl_GPa:%.4f) $(v_Pt_GPa:%.4f) $(v_tau_GPa:%.4f) $(v_dhug:%.2f) $(v_fsp3:%.5f) $(v_fsp2:%.5f) $(v_Us_eq:%.4f) $(v_up_eq:%.4f)" &
+               file ramp_profile.txt screen no &
+               title "# step time(ps) strain V/V0 rho(g/cc) T(K) P_long(GPa) P_lat(GPa) tau(GPa) dHug(K) f_sp3 f_sp2 Us_eq(km/s) up_eq(km/s)"
+
+dump           d1 all custom ${ndump} dump.ramp.lammpstrj id type x y z vx vy vz c_cn c_peatom
+dump_modify    d1 sort id
+
+restart        20000 ramp.restart.1 ramp.restart.2
+
+# ---------------- 2a-1. compression at constant strain rate -------
+fix            nve all nve
+fix            compress all deform 1 ${dir} erate ${erate} remap x
+run            ${nramp}
+unfix          compress
+write_data     ramp_peak.data nocoeff
+
+# ---------------- 2a-2. hold at maximum strain (fixed V, NVE) -----
+run            ${nhold}
+write_data     ramp_final.data nocoeff

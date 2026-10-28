@@ -1,0 +1,87 @@
+# =====================================================================
+#  STEP 1 : Equilibrate AB (Bernal) graphite at T0 and ~0 GPa
+#           ACE (ML-PACE) + D2 dispersion (tabulated), hybrid/overlay
+#
+#  in : graphite_ortho.data   (x = zigzag, y = armchair, z = c-axis)
+#  out: graphite_eq.data      (positions + velocities -> STEP 2a / 2b)
+#
+#  run: mpirun -np N lmp -in in.01_equil.lammps
+# =====================================================================
+
+# ---------------- user parameters (override with -var name value) ----
+variable  datafile index graphite_ortho.data
+variable  T0       index 300.0        # K
+variable  dt       index 0.0005       # ps (0.5 fs)
+variable  tnpt     index 10.0         # ps, NPT equilibration
+variable  tavg     index 10.0         # ps, NPT run used to average the cell
+variable  tnvt     index 5.0          # ps, NVT at the averaged cell
+variable  seed     index 4928459
+
+# ---------------- system -------------------------------------------
+units          metal
+dimension      3
+boundary       p p p
+atom_style     charge
+atom_modify    map array
+
+read_data      ${datafile}
+
+pair_style     hybrid/overlay pace table linear 10000
+pair_coeff     * * pace c_ace.yace C
+pair_coeff     * * table d2.table D2 9.0
+
+neighbor       2.0 bin
+neigh_modify   delay 0 every 1 check yes
+
+timestep       ${dt}
+
+variable       nnpt equal round(${tnpt}/${dt})
+variable       navg equal 20*round(${tavg}/${dt}/20)
+variable       nrep equal ${navg}/20
+variable       nnvt equal round(${tnvt}/${dt})
+
+variable       Lx equal lx
+variable       Ly equal ly
+variable       Lz equal lz
+variable       PGPa equal press/1.0e4
+
+thermo_style   custom step time temp pe press pxx pyy pzz lx ly lz density
+thermo_modify  flush yes
+thermo         500
+
+# ---------------- 1a. relax cell + positions, axes independent -------
+# (the supplied cell has c = 7.80 A, i.e. 3.90 A interlayer spacing;
+#  ACE+D2 should pull it back to ~3.3-3.4 A)
+fix            relax all box/relax aniso 0.0 vmax 0.001
+minimize       0.0 1.0e-6 10000 100000
+unfix          relax
+reset_timestep 0
+
+# ---------------- 1b. NPT at T0 / 0 bar -----------------------------
+# aniso (not iso): graphite is extremely anisotropic, x/y/z must relax
+# independently
+velocity       all create ${T0} ${seed} mom yes rot yes dist gaussian
+fix            npt all npt temp ${T0} ${T0} 0.1 aniso 0.0 0.0 1.0
+run            ${nnpt}
+unfix          npt
+
+# ---------------- 1c. NPT again, average the cell -------------------
+reset_timestep 0
+fix            npt all npt temp ${T0} ${T0} 0.1 aniso 0.0 0.0 1.0
+fix            avg all ave/time 20 ${nrep} ${navg} v_Lx v_Ly v_Lz v_PGPa
+run            ${navg}
+unfix          npt
+
+print          "Average cell: Lx = $(f_avg[1]) Ly = $(f_avg[2]) Lz = $(f_avg[3]) A, <P> = $(f_avg[4]) GPa"
+change_box     all x scale $(f_avg[1]/lx) y scale $(f_avg[2]/ly) z scale $(f_avg[3]/lz) remap
+unfix          avg
+
+# ---------------- 1d. NVT at the averaged cell (P0 ~ 0) -------------
+fix            nvt all nvt temp ${T0} ${T0} 0.1
+run            ${nnvt}
+unfix          nvt
+
+# your cell has 40 layers along z -> interlayer spacing = lz/40 (expect ~3.3-3.4 A)
+print          "Equilibrated: Lx = $(lx) Ly = $(ly) Lz = $(lz) A, density = $(density) g/cc, P = $(press/1.0e4) GPa, T = $(temp) K"
+write_data     graphite_eq.data nocoeff
+write_restart  graphite_eq.restart
