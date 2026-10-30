@@ -39,6 +39,16 @@ Any `index` variable at the top of a script can be overridden with `-var name va
 `pair_style lcbop` replaces ACE+D2; everything else is unchanged. Driver: `run_all.sh`
 (override `LMP`). Plots: `python plot_results.py`, `python plot_snapshots.py <dump> [dt=..] t1 t2 ...`.
 
+Trajectories are stored gzipped (OVITO and `plot_snapshots.py` read `.gz` directly):
+
+| file | run | frames |
+|---|---|---|
+| `lcbop_run/dump.ramp.lammpstrj.gz` | ramp | every 1 ps, 0-11 ps (12 frames) |
+| `lcbop_run/dump.msst_Us15.lammpstrj.gz` | MSST Us = 15 km/s | every 1 ps, 0-4 ps (5 frames) |
+| `lcbop_run/dump.msst_Us13.lammpstrj.gz` | MSST Us = 13 km/s | every 1 ps, 0-2 ps (3 frames) |
+
+Columns: id type x y z vx vy vz c_cn (coordination within 1.9 A) c_peatom (eV).
+
 | run | V/V0 | P_zz (GPa) | T (K) | sp3 |
 |---|---|---|---|---|
 | 300 K, 0 GPa: a = 2.4585 A, interlayer 3.392 A, rho0 = 2.247 g/cc | 1 | 0 | 300 | 0 % |

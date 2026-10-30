@@ -1,6 +1,8 @@
 """Side views (x-z) of a thin y-slab, atoms coloured by coordination.
 python plot_snapshots.py dump.ramp.lammpstrj 0 9 11  ->  snapshots_ramp.png   (times in ps)
-python plot_snapshots.py dump.msst_Us15.lammpstrj dt=0.00025 0 1 4      (timestep if not 0.5 fs)"""
+python plot_snapshots.py dump.msst_Us15.lammpstrj dt=0.00025 0 1 4      (timestep if not 0.5 fs)
+Gzipped dumps (*.lammpstrj.gz) are read directly."""
+import gzip
 import sys
 import numpy as np
 import matplotlib
@@ -15,7 +17,7 @@ SLAB = 3.0                       # A, thickness of the y-slab shown
 
 
 def frames(path):
-    with open(path) as fh:
+    with (gzip.open(path, "rt") if path.endswith(".gz") else open(path)) as fh:
         while True:
             line = fh.readline()
             if not line:
